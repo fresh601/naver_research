@@ -100,9 +100,9 @@ def normalize_date(value):
     if match:
 
         return (
-            f"{match.group(1)}."
-            f"{int(match.group(2)):02d}."
-            f"{int(match.group(3)):02d}"
+            f"{match.group(1)}. "
+            f"{int(match.group(2)):02d}. "
+            f"{int(match.group(3)):02d}."
         )
 
     return text
@@ -118,7 +118,11 @@ def money_text(value):
     return text
 
 
-def safe_get(url, params=None, timeout=20):
+def safe_get(
+    url,
+    params=None,
+    timeout=20
+):
 
     response = session.get(
         url,
@@ -138,9 +142,6 @@ def safe_get(url, params=None, timeout=20):
 def date_key(value):
 
     text = clean_text(value)
-
-    if not text:
-        return None
 
     match = re.search(
         r"(20\d{2})[-./]\s*(\d{1,2})[-./]\s*(\d{1,2})",
@@ -174,7 +175,10 @@ def get_brokers():
 
         if isinstance(data, dict):
 
-            items = data.get("items", [])
+            items = data.get(
+                "items",
+                []
+            )
 
         elif isinstance(data, list):
 
@@ -206,7 +210,10 @@ def get_brokers():
                 ]
             )
 
-            if code is not None and name:
+            if (
+                code is not None
+                and name
+            ):
 
                 result.append(
                     {
@@ -223,7 +230,7 @@ def get_brokers():
 
 
 # ============================================================
-# API 응답에서 items 추출
+# API items 추출
 # ============================================================
 
 def extract_items(data):
@@ -231,11 +238,13 @@ def extract_items(data):
     if isinstance(data, dict):
 
         # 실제 확인된 구조
-        if isinstance(data.get("items"), list):
+        if isinstance(
+            data.get("items"),
+            list
+        ):
 
             return data["items"]
 
-        # 혹시 구조가 변경되는 경우
         for key in (
             "researchSets",
             "contents",
@@ -245,22 +254,33 @@ def extract_items(data):
 
             value = data.get(key)
 
-            if isinstance(value, list):
+            if isinstance(
+                value,
+                list
+            ):
 
                 return value
 
         # 중첩 구조 대응
         for value in data.values():
 
-            if isinstance(value, dict):
+            if isinstance(
+                value,
+                dict
+            ):
 
-                items = extract_items(value)
+                items = extract_items(
+                    value
+                )
 
                 if items:
 
                     return items
 
-    elif isinstance(data, list):
+    elif isinstance(
+        data,
+        list
+    ):
 
         return data
 
@@ -268,45 +288,49 @@ def extract_items(data):
 
 
 # ============================================================
-# 리포트 1개 정규화
+# 리포트 데이터 정규화
 # ============================================================
 
 def normalize_research_item(item):
 
-    # 리포트 번호
     nid = first_value(
         item,
         [
             "nid",
             "researchId",
-            "id"
+            "id",
+            "researchContent.nid"
         ]
     )
 
-    # 제목
     title = as_text(
         item,
         [
             "title",
             "researchTitle",
-            "subject"
+            "researchContent.title",
+            "content.title",
+            "research.title"
         ]
     )
 
-    # 내용
-    content = as_text(
+    summary = as_text(
         item,
         [
-            "content",
             "leadtext",
             "leadText",
             "summary",
-            "description"
+            "description",
+            "content",
+            "researchContent.leadtext",
+            "researchContent.leadText",
+            "researchContent.summary",
+            "researchContent.description",
+            "content.leadtext"
         ]
     )
 
-    # 작성일
-    write_date = normalize_date(
+    published = normalize_date(
         first_value(
             item,
             [
@@ -314,45 +338,48 @@ def normalize_research_item(item):
                 "date",
                 "publishDate",
                 "publishedAt",
-                "researchDate"
+                "researchDate",
+                "researchContent.date",
+                "researchContent.publishDate"
             ]
         )
     )
 
-    # 증권사
     broker = as_text(
         item,
         [
             "brokerName",
             "broker.name",
             "broker.label",
+            "researchContent.brokerName",
             "issuerName",
             "press"
         ]
     )
 
-    # 종목명
     stock = as_text(
         item,
         [
-            "itemName",
             "stockName",
+            "itemName",
             "item.name",
-            "stock.name"
+            "stock.name",
+            "researchContent.stockName",
+            "researchContent.itemName"
         ]
     )
 
-    # 종목코드
     item_code = first_value(
         item,
         [
             "itemCode",
             "stockCode",
-            "code"
+            "code",
+            "item.code",
+            "researchContent.itemCode"
         ]
     )
 
-    # 목표주가
     target = money_text(
         first_value(
             item,
@@ -360,44 +387,70 @@ def normalize_research_item(item):
                 "goalPrice",
                 "goalPriceText",
                 "targetPrice",
-                "targetPriceText"
+                "targetPriceText",
+                "researchContent.goalPrice",
+                "researchContent.targetPrice"
             ]
         )
     )
 
-    # 투자의견
     opinion = as_text(
         item,
         [
             "opinionText",
             "opinion",
             "investmentOpinion",
-            "recommendation"
+            "recommendation",
+            "researchContent.opinion"
+        ]
+    )
+
+    industry = as_text(
+        item,
+        [
+            "industry",
+            "industryName",
+            "researchContent.industry"
         ]
     )
 
     return {
-        "id": str(nid) if nid is not None else "",
-        "date": write_date,
+        "id": (
+            str(nid)
+            if nid is not None
+            else ""
+        ),
+
+        "date": published,
+
         "stock": stock,
+
         "code": (
             str(item_code)
             if item_code is not None
             else ""
         ),
+
         "title": title,
-        "summary": content,
+
+        "summary": summary,
+
         "broker": broker,
+
         "target": target,
+
         "opinion": opinion,
+
+        "industry": industry,
+
         "raw": item,
     }
 
 
 # ============================================================
-# 네이버 리서치 API
+# 네이버 실제 리서치 API
 #
-# 실제 확인된 요청
+# 실제 확인된 요청:
 #
 # /api/stockSecurity/researches/v2/company
 # ?index=0
@@ -416,8 +469,14 @@ def get_research_api(
     url = f"{API_BASE}/company"
 
     params = [
-        ("index", int(index)),
-        ("size", int(size)),
+        (
+            "index",
+            int(index)
+        ),
+        (
+            "size",
+            int(size)
+        )
     ]
 
     if clean_text(query):
@@ -436,14 +495,15 @@ def get_research_api(
 
     data = response.json()
 
-    raw_items = extract_items(data)
-
     items = [
         normalize_research_item(item)
-        for item in raw_items
+        for item in extract_items(data)
     ]
 
-    if isinstance(data, dict):
+    if isinstance(
+        data,
+        dict
+    ):
 
         total = data.get(
             "totalCount"
@@ -490,37 +550,45 @@ def apply_local_filters(
 
     broker_codes = {
         str(x)
-        for x in (broker_codes or [])
+        for x in (
+            broker_codes
+            or []
+        )
     }
 
     result = []
 
-    for item in items:
+    for row in items:
 
-        item_date = date_key(
-            item.get("date", "")
+        d = date_key(
+            row.get(
+                "date",
+                ""
+            )
         )
 
-        # 시작일
         if (
             start_obj
-            and item_date
-            and item_date < start_obj
+            and d
+            and d < start_obj
         ):
+
             continue
 
-        # 종료일
         if (
             end_obj
-            and item_date
-            and item_date > end_obj
+            and d
+            and d > end_obj
         ):
+
             continue
 
-        # 증권사
         if broker_codes:
 
-            raw = item.get("raw") or {}
+            raw = (
+                row.get("raw")
+                or {}
+            )
 
             broker_code = first_value(
                 raw,
@@ -535,22 +603,19 @@ def apply_local_filters(
                 or str(broker_code)
                 not in broker_codes
             ):
+
                 continue
 
-        result.append(item)
+        result.append(row)
 
     return result
 
 
 # ============================================================
-# 검색
+# 검색어 필터
 #
-# 중요:
-# 실제 API Response를 확인한 결과
-# query=삼성전자를 보내도 items에 여러 종목이
-# 함께 들어올 수 있음.
-#
-# 따라서 API query + 로컬 검색을 같이 사용한다.
+# 네이버 API의 query 검색 결과가 여러 종목을 포함할 수 있으므로
+# 우리 프로그램에서 한 번 더 정확하게 검색한다.
 # ============================================================
 
 def filter_research_items(
@@ -558,7 +623,9 @@ def filter_research_items(
     query
 ):
 
-    q = clean_text(query).lower()
+    q = clean_text(
+        query
+    ).lower()
 
     if not q:
 
@@ -570,17 +637,43 @@ def filter_research_items(
 
         search_text = " ".join(
             [
-                item.get("stock", ""),
-                item.get("code", ""),
-                item.get("title", ""),
-                item.get("summary", ""),
-                item.get("broker", ""),
+                item.get(
+                    "stock",
+                    ""
+                ),
+
+                item.get(
+                    "code",
+                    ""
+                ),
+
+                item.get(
+                    "title",
+                    ""
+                ),
+
+                item.get(
+                    "summary",
+                    ""
+                ),
+
+                item.get(
+                    "broker",
+                    ""
+                ),
+
+                item.get(
+                    "industry",
+                    ""
+                ),
             ]
         ).lower()
 
         if q in search_text:
 
-            result.append(item)
+            result.append(
+                item
+            )
 
     return result
 
@@ -662,7 +755,7 @@ def get_research_html():
             ""
         )
 
-        report_id = (
+        rid = (
             href.rstrip("/")
             .split("/")[-1]
             if href
@@ -671,15 +764,36 @@ def get_research_html():
 
         rows.append(
             {
-                "id": report_id,
-                "date": clean_text(date_el),
-                "stock": clean_text(stock_el),
+                "id": rid,
+
+                "date": clean_text(
+                    date_el
+                ),
+
+                "stock": clean_text(
+                    stock_el
+                ),
+
                 "code": "",
-                "title": clean_text(title_el),
-                "summary": clean_text(lead_el),
-                "broker": clean_text(broker_el),
+
+                "title": clean_text(
+                    title_el
+                ),
+
+                "summary": clean_text(
+                    lead_el
+                ),
+
+                "broker": clean_text(
+                    broker_el
+                ),
+
                 "target": target,
+
                 "opinion": opinion,
+
+                "industry": "",
+
                 "raw": {},
             }
         )
@@ -688,12 +802,12 @@ def get_research_html():
 
 
 # ============================================================
-# 핵심 데이터 조회
+# 리서치 조회
 # ============================================================
 
 def get_research(
-    page,
-    page_size,
+    index,
+    size,
     query,
     start_date,
     end_date,
@@ -704,19 +818,15 @@ def get_research(
 
     try:
 
-        # ----------------------------------------------------
-        # Streamlit 페이지 번호
-        # ----------------------------------------------------
-
         target_start = (
-            page * page_size
+            index * size
         )
 
         target_end = (
-            target_start + page_size
+            target_start + size
         )
 
-        matched = []
+        collected = []
 
         api_total = None
 
@@ -731,14 +841,13 @@ def get_research(
         )
 
         # ----------------------------------------------------
-        # API 페이지를 필요한 만큼 읽는다.
-        #
-        # 네이버 API는 size=15 기준으로 가져온다.
+        # 네이버 API는 15개씩 가져온다.
+        # 필요한 화면 페이지를 만들 때까지 계속 읽는다.
         # ----------------------------------------------------
 
         while (
             has_next
-            and api_index < 300
+            and api_index < 200
         ):
 
             items, total, next_flag = (
@@ -758,7 +867,7 @@ def get_research(
                 break
 
             # ------------------------------------------------
-            # 날짜 / 증권사
+            # 날짜 / 증권사 필터
             # ------------------------------------------------
 
             filtered = apply_local_filters(
@@ -769,9 +878,7 @@ def get_research(
             )
 
             # ------------------------------------------------
-            # 검색어
-            #
-            # 이 부분이 핵심
+            # 검색어를 한 번 더 정확하게 필터링
             # ------------------------------------------------
 
             filtered = filter_research_items(
@@ -779,13 +886,13 @@ def get_research(
                 query
             )
 
-            matched.extend(
+            collected.extend(
                 filtered
             )
 
             # ------------------------------------------------
             # 최신순이므로 시작일보다 오래된 자료가
-            # 나오면 더 이상 내려갈 필요가 없다.
+            # 나오면 더 이상 조회하지 않는다.
             # ------------------------------------------------
 
             if start_obj:
@@ -801,9 +908,9 @@ def get_research(
                 ]
 
                 dates = [
-                    x
-                    for x in dates
-                    if x is not None
+                    d
+                    for d in dates
+                    if d is not None
                 ]
 
                 if (
@@ -815,33 +922,27 @@ def get_research(
 
                     break
 
-            # ------------------------------------------------
-            # 다음 API 페이지
-            # ------------------------------------------------
-
             has_next = bool(
                 next_flag
             )
 
             api_index += 1
 
-            # ------------------------------------------------
-            # 현재 화면에 필요한 만큼 확보
-            # ------------------------------------------------
-
+            # 필요한 결과를 확보하면 종료
             if (
-                len(matched)
+                len(collected)
                 >= target_end
             ):
 
                 break
 
         # ----------------------------------------------------
-        # 현재 Streamlit 페이지에 해당하는 결과
+        # 현재 페이지
         # ----------------------------------------------------
 
-        page_items = matched[
-            target_start:target_end
+        page_items = collected[
+            target_start:
+            target_end
         ]
 
         # ----------------------------------------------------
@@ -849,41 +950,35 @@ def get_research(
         # ----------------------------------------------------
 
         if (
-            not query.strip()
-            and not start_date
-            and not end_date
-            and not broker_codes
+            start_date
+            or end_date
+            or broker_codes
         ):
 
-            display_total = api_total
-
-        else:
-
             display_total = len(
-                matched
+                collected
             )
 
             if (
                 has_next
-                and len(matched)
+                and len(collected)
                 >= target_end
             ):
 
                 display_total = (
-                    f"{len(matched)}+"
+                    f"{len(collected)}+"
                 )
 
-        # ----------------------------------------------------
-        # 다음 페이지 존재 여부
-        # ----------------------------------------------------
+        else:
+
+            display_total = api_total
 
         more = bool(
             has_next
             and (
-                len(matched)
-                > target_end
-                or len(matched)
+                len(collected)
                 >= target_end
+                or api_index < 200
             )
         )
 
@@ -919,37 +1014,38 @@ def get_research(
         )
 
         start_index = (
-            page * page_size
+            index * size
         )
 
-        page_items = items[
-            start_index:
-            start_index + page_size
-        ]
-
         return (
-            page_items,
+            items[
+                start_index:
+                start_index + size
+            ],
+
             len(items),
+
             (
                 start_index
-                + page_size
+                + size
                 < len(items)
             ),
+
             "HTML fallback"
         )
 
-    except Exception as html_error:
+    except Exception as error:
 
         raise RuntimeError(
             "네이버 리서치 데이터를 "
             "가져오지 못했습니다.\n\n"
             f"API 오류: {api_error}\n\n"
-            f"HTML 오류: {html_error}"
+            f"HTML 오류: {error}"
         )
 
 
 # ============================================================
-# 상세 리포트
+# 상세 API
 # ============================================================
 
 @st.cache_data(ttl=300)
@@ -962,20 +1058,36 @@ def get_research_detail(
         f"{research_id}"
     )
 
-    response = safe_get(url)
+    response = safe_get(
+        url
+    )
 
     return response.json()
 
+
+# ============================================================
+# 상세 리포트 데이터 추출
+#
+# 실제 확인된 상세 API:
+#
+# /api/stockSecurity/researches/v2/company/96429
+#
+# 원문:
+# attachUrl
+# attachName
+# ============================================================
 
 def extract_detail(data):
 
     content = data
 
-    if isinstance(data, dict):
+    if isinstance(
+        data,
+        dict
+    ):
 
         for key in (
             "researchContent",
-            "content",
             "research",
             "data"
         ):
@@ -989,6 +1101,10 @@ def extract_detail(data):
 
                 break
 
+    # --------------------------------------------------------
+    # 제목
+    # --------------------------------------------------------
+
     title = as_text(
         content,
         [
@@ -998,18 +1114,26 @@ def extract_detail(data):
         ]
     )
 
+    # --------------------------------------------------------
+    # 작성일
+    # --------------------------------------------------------
+
     report_date = normalize_date(
         first_value(
             content,
             [
-                "date",
                 "writeDate",
+                "date",
                 "publishDate",
                 "publishedAt",
                 "researchDate"
             ]
         )
     )
+
+    # --------------------------------------------------------
+    # 증권사
+    # --------------------------------------------------------
 
     broker = as_text(
         content,
@@ -1021,6 +1145,10 @@ def extract_detail(data):
         ]
     )
 
+    # --------------------------------------------------------
+    # 종목
+    # --------------------------------------------------------
+
     stock = as_text(
         content,
         [
@@ -1030,17 +1158,25 @@ def extract_detail(data):
         ]
     )
 
+    # --------------------------------------------------------
+    # 목표주가
+    # --------------------------------------------------------
+
     target = money_text(
         first_value(
             content,
             [
-                "targetPrice",
-                "targetPriceText",
                 "goalPrice",
-                "goalPriceText"
+                "goalPriceText",
+                "targetPrice",
+                "targetPriceText"
             ]
         )
     )
+
+    # --------------------------------------------------------
+    # 투자의견
+    # --------------------------------------------------------
 
     opinion = as_text(
         content,
@@ -1052,17 +1188,68 @@ def extract_detail(data):
         ]
     )
 
+    # --------------------------------------------------------
+    # 리포트 내용
+    # --------------------------------------------------------
+
     body = first_value(
         content,
         [
-            "body",
             "content",
+            "body",
             "html",
             "contents",
             "researchBody",
             "reportContent"
         ]
     )
+
+    # ========================================================
+    # 실제 원문 PDF
+    #
+    # 네이버 상세 API에서 확인된 필드
+    #
+    # attachUrl
+    # attachName
+    #
+    # 예:
+    # https://stock.pstatic.net/
+    # stock-research/company/16/
+    # 20261002_company_586248000.pdf
+    # ========================================================
+
+    pdf_url = first_value(
+        content,
+        [
+            "attachUrl",
+            "attachmentUrl",
+            "pdfUrl",
+            "fileUrl",
+            "downloadUrl"
+        ]
+    )
+
+    pdf_name = first_value(
+        content,
+        [
+            "attachName",
+            "attachmentName",
+            "pdfName",
+            "fileName"
+        ]
+    )
+
+    if pdf_url:
+
+        pdf_url = str(
+            pdf_url
+        ).strip()
+
+    if pdf_name:
+
+        pdf_name = clean_text(
+            pdf_name
+        )
 
     return {
         "title": title,
@@ -1072,6 +1259,8 @@ def extract_detail(data):
         "target": target,
         "opinion": opinion,
         "body": body,
+        "pdf_url": pdf_url,
+        "pdf_name": pdf_name,
         "raw": data,
     }
 
@@ -1092,8 +1281,8 @@ st.title(
 )
 
 st.caption(
-    "stock.naver.com 리서치 페이지 대응 "
-    "· 실제 API + 검색 보정"
+    "새로운 stock.naver.com 리서치 페이지 대응 "
+    "· API 우선 / HTML fallback"
 )
 
 
@@ -1114,15 +1303,11 @@ with st.sidebar:
         )
     )
 
-    # --------------------------------------------------------
-    # 증권사
-    # --------------------------------------------------------
-
     broker_list = get_brokers()
 
     broker_map = {
-        item["name"]: item["code"]
-        for item in broker_list
+        x["name"]: x["code"]
+        for x in broker_list
     }
 
     broker_names = [
@@ -1135,10 +1320,6 @@ with st.sidebar:
         "발행사",
         broker_names
     )
-
-    # --------------------------------------------------------
-    # 날짜
-    # --------------------------------------------------------
 
     today = date.today()
 
@@ -1156,10 +1337,6 @@ with st.sidebar:
         today
     )
 
-    # --------------------------------------------------------
-    # 페이지 크기
-    # --------------------------------------------------------
-
     page_size = st.selectbox(
         "한 페이지 표시",
         [
@@ -1172,10 +1349,6 @@ with st.sidebar:
         index=2
     )
 
-    # --------------------------------------------------------
-    # 새로고침
-    # --------------------------------------------------------
-
     if st.button(
         "🔄 새로고침",
         use_container_width=True
@@ -1187,7 +1360,7 @@ with st.sidebar:
 
 
 # ============================================================
-# 선택한 증권사 코드
+# 증권사 코드
 # ============================================================
 
 broker_codes = []
@@ -1202,7 +1375,7 @@ if selected_broker != "전체":
 
 
 # ============================================================
-# 날짜 문자열
+# 날짜
 # ============================================================
 
 start_date = start.strftime(
@@ -1215,7 +1388,7 @@ end_date = end.strftime(
 
 
 # ============================================================
-# 검색 조건 변경 시 1페이지로 이동
+# 검색 조건 변경 시 1페이지
 # ============================================================
 
 filter_signature = (
@@ -1223,7 +1396,7 @@ filter_signature = (
     selected_broker,
     start.isoformat(),
     end.isoformat(),
-    page_size,
+    page_size
 )
 
 
@@ -1291,8 +1464,8 @@ try:
 
     rows, total, has_next, source = (
         get_research(
-            page=page,
-            page_size=page_size,
+            index=page,
+            size=page_size,
             query=query.strip(),
             start_date=start_date,
             end_date=end_date,
@@ -1357,7 +1530,7 @@ st.divider()
 
 
 # ============================================================
-# 검색 결과 없음
+# 결과 없음
 # ============================================================
 
 if not rows:
@@ -1368,7 +1541,7 @@ if not rows:
 
 
 # ============================================================
-# 리서치 출력
+# 리서치 목록
 # ============================================================
 
 else:
@@ -1502,6 +1675,10 @@ else:
                         )
 
 
+                        # -------------------------------------
+                        # 상세 정보
+                        # -------------------------------------
+
                         meta = []
 
 
@@ -1551,6 +1728,35 @@ else:
                                 " · ".join(meta)
                             )
 
+
+                        # -------------------------------------
+                        # 실제 원문 PDF
+                        # -------------------------------------
+
+                        if detail.get(
+                            "pdf_url"
+                        ):
+
+                            st.link_button(
+                                "📄 원문 리포트 보기",
+                                detail["pdf_url"],
+                                use_container_width=True
+                            )
+
+
+                            if detail.get(
+                                "pdf_name"
+                            ):
+
+                                st.caption(
+                                    "파일명: "
+                                    f"{detail['pdf_name']}"
+                                )
+
+
+                        # -------------------------------------
+                        # 리포트 내용
+                        # -------------------------------------
 
                         body = detail[
                             "body"
