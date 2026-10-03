@@ -487,8 +487,16 @@ except Exception as e:
     st.stop()
 
 with col3:
-    if total:
-        st.write(f"페이지 {page + 1} · 전체 {total:,}건 · 데이터: {source}")
+    # 네이버 API의 totalCount가 숫자/문자열/None 중 어떤 형태로 와도 안전하게 처리
+    total_display = None
+    if total not in (None, ""):
+        try:
+            total_display = f"{int(total):,}"
+        except (TypeError, ValueError):
+            total_display = str(total)
+
+    if total_display:
+        st.write(f"페이지 {page + 1} · 전체 {total_display}건 · 데이터: {source}")
     else:
         st.write(f"페이지 {page + 1} · 데이터: {source}")
 
