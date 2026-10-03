@@ -1,5 +1,6 @@
 import html
 import re
+import html
 from datetime import date, timedelta
 from urllib.parse import urljoin
 
@@ -148,6 +149,7 @@ def normalize_research_item(x):
         "leadText",
         "summary",
         "description",
+        "content",
         "researchContent.leadtext",
         "researchContent.leadText",
         "researchContent.summary",
@@ -156,6 +158,7 @@ def normalize_research_item(x):
     ])
 
     published = normalize_date(first_value(x, [
+        "writeDate",
         "date",
         "publishDate",
         "publishedAt",
@@ -200,6 +203,7 @@ def normalize_research_item(x):
     ]))
 
     opinion = as_text(x, [
+        "opinionText",
         "opinion",
         "investmentOpinion",
         "recommendation",
@@ -228,41 +232,25 @@ def normalize_research_item(x):
 
 
 @st.cache_data(ttl=180)
-def get_research_api(
-    index=0,
-    size=20,
-    query="",
-    start_date="",
-    end_date="",
-    broker_codes=None,
-    item_codes=None,
-    industry_types=None,
-):
+def get_research_api(index=0, size=15, query=""):
+    """네이버 실제 페이지가 사용하는 API 호출을 그대로 재현한다.
+
+    실제 Network 확인 결과:
+      GET /api/stockSecurity/researches/v2/company
+      ?index=0&size=15&query=삼성전자
+
+    따라서 날짜/증권사 등의 임의 파라미터는 이 함수에 넣지 않는다.
+    네이버 API가 반환한 결과에 대해 화면에서 추가 필터를 적용한다.
+    """
     url = f"{API_BASE}/company"
-    params = [("index", index), ("size", size)]
-
-    if query:
-        params.append(("query", query))
-    if start_date:
-        params.append(("startDate", start_date))
-    if end_date:
-        params.append(("endDate", end_date))
-
-    for code in broker_codes or []:
-        params.append(("brokerCodes", code))
-
-    for code in item_codes or []:
-        params.append(("itemCodes", code))
-
-    for code in industry_types or []:
-        params.append(("industryTypes", code))
+    params = [("index", int(index)), ("size", int(size))]
+    if clean_text(query):
+        params.append(("query", clean_text(query)))
 
     r = safe_get(url, params=params)
     data = r.json()
 
     items = [normalize_research_item(x) for x in extract_items(data)]
-
-    # 화면 표시용 메타
     if isinstance(data, dict):
         total = data.get("totalCount")
         has_next = data.get("hasNext")
@@ -271,6 +259,150 @@ def get_research_api(
         has_next = None
 
     return items, total, has_next
+
+
+def _date_key(value):
+    s = clean_text(value)
+    m = re.search(r"(20\d{2})[-./]\s*(\d{1,2})[-./]\s*(\d{1,2})", s)
+    if not m:
+        return None
+    return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def apply_local_filters(items, start_date="", end_date="", broker_codes=None):
+    """네이버 API 응답에 대해 날짜/증권사 필터를 적용한다."""
+    start_obj = _date_key(start_date) if start_date else None
+    end_obj = _date_key(end_date) if end_date else None
+    broker_codes = {str(x) for x in (broker_codes or [])}
+
+    result = []
+    for row in items:
+        d = _date_key(row.get("date", ""))
+
+        if start_obj and d and d < start_obj:
+            continue
+        if end_obj and d and d > end_obj:
+            continue
+
+        if broker_codes:
+            raw = row.get("raw") or {}
+            broker_code = first_value(raw, ["brokerCode", "broker.code"])
+            if broker_code is None or str(broker_code) not in broker_codes:
+                continue
+
+        result.append(row)
+
+    return result
+
+
+def filter_research_items(items, query):
+    """HTML fallback에서 사용하는 로컬 검색."""
+    q = clean_text(query).lower()
+    if not q:
+        return items
+    result = []
+    for x in items:
+        haystack = " ".join([
+            x.get("stock", ""),
+            x.get("title", ""),
+            x.get("summary", ""),
+            x.get("broker", ""),
+            x.get("industry", ""),
+        ]).lower()
+        if q in haystack:
+            result.append(x)
+    return result
+
+
+def get_research(index, size, query, start_date, end_date, broker_codes):
+    """네이버의 실제 검색 API를 사용해 페이지를 구성한다.
+
+    검색어가 있으면 API의 query 파라미터를 직접 사용한다.
+    날짜/증권사 필터로 일부 결과가 제외될 수 있으므로 필요한 경우
+    다음 API 페이지도 순차적으로 읽어 현재 화면을 채운다.
+    """
+    api_error = ""
+
+    try:
+        target_start = index * size
+        filtered = []
+        api_total = None
+        api_page = 0
+        has_next = True
+        scanned = 0
+
+        # 네이버 결과는 최신순이므로 날짜 범위가 명확하면 시작일보다
+        # 오래된 결과가 나온 시점에서 더 이상 읽지 않는다.
+        while has_next and api_page < 100:
+            items, total, next_flag = get_research_api(
+                index=api_page,
+                size=15,
+                query=query.strip(),
+            )
+            scanned += len(items)
+            if api_total is None:
+                api_total = total
+
+            if not items:
+                break
+
+            page_filtered = apply_local_filters(
+                items,
+                start_date=start_date,
+                end_date=end_date,
+                broker_codes=broker_codes,
+            )
+            filtered.extend(page_filtered)
+
+            # 현재 API 페이지에서 시작일보다 오래된 자료가 등장하면
+            # 이후 페이지도 더 오래된 자료일 가능성이 높으므로 중단한다.
+            start_obj = _date_key(start_date) if start_date else None
+            if start_obj:
+                parsed_dates = [_date_key(x.get("date", "")) for x in items]
+                parsed_dates = [x for x in parsed_dates if x is not None]
+                if parsed_dates and min(parsed_dates) < start_obj:
+                    has_next = False
+                    break
+
+            has_next = bool(next_flag)
+            api_page += 1
+
+            # 화면에 필요한 페이지까지 충분히 확보했고, 추가 필터가 없다면
+            # 해당 API 페이지 하나만으로 바로 반환한다.
+            if not start_date and not end_date and not broker_codes and len(filtered) >= target_start + size:
+                break
+
+        page_items = filtered[target_start:target_start + size]
+
+        # 로컬 필터가 없는 경우 totalCount는 네이버가 직접 계산한 정확한 값이다.
+        # 로컬 필터가 있는 경우에는 전체 결과 수를 정확히 계산하기 위해
+        # 모든 페이지를 읽지는 않고, 현재 확보한 결과를 기준으로 표시한다.
+        if start_date or end_date or broker_codes:
+            display_total = len(filtered)
+            if has_next and len(filtered) <= target_start + size:
+                display_total = f"{len(filtered)}+"
+        else:
+            display_total = api_total
+
+        return page_items, display_total, bool(has_next and (target_start + size < len(filtered) or api_page < 100)), "API"
+
+    except Exception as e:
+        api_error = str(e)
+
+    # API가 실패하면 현재 HTML 구조로 fallback
+    try:
+        items = get_research_html()
+        items = apply_local_filters(items, start_date, end_date, broker_codes)
+        if query:
+            items = filter_research_items(items, query)
+        start_idx = index * size
+        return items[start_idx:start_idx + size], len(items), start_idx + size < len(items), "HTML fallback"
+    except Exception as e:
+        raise RuntimeError(
+            f"네이버 리서치 데이터를 가져오지 못했습니다.\n"
+            f"API 오류: {api_error}\n"
+            f"HTML 오류: {e}"
+        )
 
 
 # -----------------------------
@@ -322,39 +454,128 @@ def get_research_html():
     return rows
 
 
-def get_research(index, size, query, start_date, end_date, broker_codes):
-    try:
-        items, total, has_next = get_research_api(
-            index=index,
-            size=size,
-            query=query,
+@st.cache_data(ttl=180)
+def get_all_research_api(start_date="", end_date="", broker_codes=None, max_pages=30):
+    """검색을 위해 API 목록을 여러 페이지 가져온다.
+
+    새 네이버 리서치 API에서 query 파라미터가 검색어를 제대로 적용하지 않는
+    경우가 있어, 검색어는 가져온 리서치 목록에 대해 로컬에서 적용한다.
+    현재 전체 건수가 많지 않으므로 최대 30페이지까지 안전하게 순회한다.
+    """
+    all_items = []
+    total = None
+
+    for idx in range(max_pages):
+        items, page_total, has_next = get_research_api(
+            index=idx,
+            size=50,
+            query="",
             start_date=start_date,
             end_date=end_date,
             broker_codes=broker_codes,
         )
 
-        # API가 정상적으로 데이터를 주면 API 결과 사용
+        if page_total not in (None, ""):
+            try:
+                total = int(page_total)
+            except (TypeError, ValueError):
+                total = page_total
+
+        if not items:
+            break
+
+        all_items.extend(items)
+
+        # API가 hasNext를 주는 경우 우선 사용한다.
+        if has_next is False:
+            break
+
+        # totalCount를 알 수 있으면 필요한 만큼만 가져온다.
+        if isinstance(total, int) and len(all_items) >= total:
+            break
+
+    return all_items, total
+
+
+def filter_research_items(items, query):
+    """종목명/제목/내용/증권사를 대상으로 검색한다."""
+    q = clean_text(query).lower()
+    if not q:
+        return items
+
+    result = []
+    for x in items:
+        haystack = " ".join([
+            x.get("stock", ""),
+            x.get("title", ""),
+            x.get("summary", ""),
+            x.get("broker", ""),
+            x.get("industry", ""),
+        ]).lower()
+        if q in haystack:
+            result.append(x)
+    return result
+
+
+def filter_research_items(items, query):
+    """HTML fallback에서 사용하는 로컬 검색."""
+    q = clean_text(query).lower()
+    if not q:
+        return items
+    result = []
+    for x in items:
+        haystack = " ".join([
+            x.get("stock", ""),
+            x.get("title", ""),
+            x.get("summary", ""),
+            x.get("broker", ""),
+            x.get("industry", ""),
+        ]).lower()
+        if q in haystack:
+            result.append(x)
+    return result
+
+
+def get_research(index, size, query, start_date, end_date, broker_codes):
+    api_error = ""
+
+    try:
+        if query:
+            # 검색어가 있으면 전체 목록을 가져온 뒤 로컬 검색한다.
+            all_items, api_total = get_all_research_api(
+                start_date=start_date,
+                end_date=end_date,
+                broker_codes=broker_codes,
+            )
+            filtered = filter_research_items(all_items, query)
+
+            start_idx = index * size
+            page_items = filtered[start_idx:start_idx + size]
+            has_next = start_idx + size < len(filtered)
+            return page_items, len(filtered), has_next, "API · 검색"
+
+        # 검색어가 없으면 기존처럼 API 페이지 단위로 가져온다.
+        items, total, has_next = get_research_api(
+            index=index,
+            size=size,
+            query="",
+            start_date=start_date,
+            end_date=end_date,
+            broker_codes=broker_codes,
+        )
+
         if items:
             return items, total, has_next, "API"
+
     except Exception as e:
         api_error = str(e)
-    else:
-        api_error = ""
 
     # API가 실패하거나 빈 응답이면 현재 HTML 구조로 fallback
     try:
         items = get_research_html()
 
         if query:
-            q = query.lower()
-            items = [
-                x for x in items
-                if q in (x["title"] + " " + x["summary"] + " " + x["stock"]).lower()
-            ]
-
-        if broker_codes:
-            # HTML fallback에는 broker code가 없으므로 이름 필터는 하지 않음
-            pass
+            items = filter_research_items(items, query)
 
         return items, len(items), False, "HTML fallback"
     except Exception as e:
@@ -457,8 +678,23 @@ if selected_broker != "전체":
 start_date = start.strftime("%Y-%m-%d")
 end_date = end.strftime("%Y-%m-%d")
 
+# 검색 조건이 바뀌면 이전 페이지 번호를 유지하지 않고 1페이지로 이동한다.
+# 예: 전체 목록에서 2페이지를 보고 있다가 '삼성전자'를 검색하면
+# 2페이지의 결과만 검색하는 문제가 생기므로 반드시 페이지를 초기화한다.
+filter_signature = (
+    query.strip(),
+    selected_broker,
+    start.isoformat(),
+    end.isoformat(),
+    page_size,
+)
+
 if "page" not in st.session_state:
     st.session_state.page = 0
+
+if st.session_state.get("filter_signature") != filter_signature:
+    st.session_state.page = 0
+    st.session_state.filter_signature = filter_signature
 
 col1, col2, col3 = st.columns([1, 1, 4])
 with col1:
